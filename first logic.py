@@ -5,8 +5,8 @@ import time
 # ПИНЫ
 PHOTO_PIN = 34      # фоторезистор
 MIC_PIN = 35        # микрофон
-PIR_PIN = 27        # PIR
-BUTTON_PIN = 14     # кнопка на 14 (сигнал)
+PIR_PIN = 17        # PIR
+BUTTON_PIN = 15     # кнопка
 LED_PIN = 25        # 6812 RGB
 
 NUM_LEDS = 4
@@ -21,7 +21,7 @@ mic_sensor.atten(ADC.ATTN_11DB)
 mic_sensor.width(ADC.WIDTH_12BIT)
 
 pir = Pin(PIR_PIN, Pin.IN)
-button = Pin(BUTTON_PIN, Pin.IN, Pin.PULL_DOWN)
+button = Pin(BUTTON_PIN, Pin.IN)
 
 # LED
 np = neopixel.NeoPixel(Pin(LED_PIN), NUM_LEDS)
@@ -82,8 +82,7 @@ def handle_button():
     global mode, last_button_time, button_was_pressed
 
     now = time.ticks_ms()
-    pressed = (button.value() == 0)
-
+    pressed = (button.value() == 1)
     if pressed and not button_was_pressed:
         if time.ticks_diff(now, last_button_time) > 250:
             mode = (mode + 1) % 3
@@ -144,7 +143,8 @@ while True:
     mic_avg, mic_amplitude = read_mic_level()
     motion_detected = pir.value() == 1
 
-    state = choose_state(light_value, mic_amplitude, motion_detected)
+    ## state = choose_state(light_value, mic_amplitude, motion_detected)
+    state = STATE_FOCUS
     apply_state(state, mic_amplitude)
     
     print(
@@ -156,42 +156,7 @@ while True:
         "| pir =", int(motion_detected)
     )
     
-    time.sleep(0.2)
+    ## time.sleep(0.2)
     
-    
-    """
-from machine import Pin
-import neopixel
-import time
-
-print("Test")
-
-LED_PIN = 25
-NUM_LEDS = 4
-
-np = neopixel.NeoPixel(Pin(LED_PIN), NUM_LEDS, bpp=4)
-print(np)
-
-
-def fill(color):
-    for i in range(NUM_LEDS):
-        np[i] = color
-        print(color)
-    np.write()
-
-while True:
-    fill((255, 0, 0,0))   # красный
-    time.sleep(1)
-
-    fill((0, 255, 0,0))   # зелёный
-    time.sleep(1)
-
-    fill((0, 0, 255,0))   # синий
-    time.sleep(1)
-
-    fill((255, 180, 50,0))  # тёплый
-    time.sleep(1)
-
-    fill((0, 0, 0,0))     # выкл
-    time.sleep(1)
-    """
+    print(button.value())
+    ## time.sleep(0.1)
