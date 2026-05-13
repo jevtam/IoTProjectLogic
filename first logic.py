@@ -2,11 +2,11 @@ from machine import Pin, ADC
 import neopixel
 import time
 
-# ПИНЫ
+# ПИНЫ (СТРОГО СОХРАНЕНЫ)
 PHOTO_PIN = 34      # фоторезистор
 MIC_PIN = 35        # микрофон
 PIR_PIN = 17        # PIR
-BUTTON_PIN = 15     # кнопка
+BUTTON_PIN = 15     # кнопка на 14 (сигнал)
 LED_PIN = 25        # 6812 RGB
 
 NUM_LEDS = 4
@@ -36,7 +36,7 @@ def led_off():
 
 def set_music_level(level):
     level = max(0, min(255, level))
-    fill((level, 40, level // 2))
+    fill((level, level // 2, level // 2))
 
 # РЕЖИМЫ
 MODE_AUTO = 0
@@ -58,25 +58,53 @@ mode = MODE_AUTO
 last_button_time = 0
 button_was_pressed = False
 
-# порог темноты надо будет подстроить по реальным значениям
+# НАСТРОЙКИ ПОРОГОВ
 LIGHT_THRESHOLD = 2500
-MIC_THRESHOLD = 150
+MIC_THRESHOLD = 0	
 NO_MOTION_TIMEOUT = 15
+
+# Хранилище для сглаженной амплитуды
+global_smooth_amplitude = 0
+# Скорость затухания (чем ближе к 1.0, тем медленнее гаснет. Например: 0.85 - плавно, 0.5 - быстро)
+FADE_COEFFICIENT = 0.88 
 
 last_motion_time = time.time()
 
 def read_light():
     return light_sensor.read()
 
-def read_mic_level(samples=40):
-    values = []
+def read_mic_level(samples=150):
+    global global_smooth_amplitude
+    
+    min_val = 4095
+    max_val = 0
+    avg_sum = 0
+    
+    # Читаем физические данные с датчика
     for _ in range(samples):
-        values.append(mic_sensor.read())
-        time.sleep_ms(2)
+        val = mic_sensor.read()
+        avg_sum += val
+        if val < min_val: min_val = val
+        if val > max_val: max_val = val
+        
+    raw_amplitude = max_val - min_val
+    avg = avg_sum // samples
+    
+    # ЛОГИКА ФИЛЬТРАЦИИ ПРОСАДОК:
+    # Если датчик поймал звук громче, чем наше текущее сглаженное значение — мгновенно прыгаем вверх
+    if raw_amplitude > global_smooth_amplitude:
+        global_smooth_amplitude = raw_amplitude
+    else:
+        # Если датчик просел (выдал 0 или просто резко упал) — плавно уменьшаем старое значение
+        global_smooth_amplitude = int(global_smooth_amplitude * FADE_COEFFICIENT)
+        
+    # Защита: если амплитуда упала совсем низко, принудительно обнуляем
+    if global_smooth_amplitude < 10:
+        global_smooth_amplitude = 0
 
-    avg = sum(values) / len(values)
-    amplitude = max(values) - min(values)
-    return int(avg), int(amplitude)
+    # Возвращаем вместо сырой амплитуды (raw_amplitude) нашу сглаженную (smooth_amplitude)
+    return avg, global_smooth_amplitude
+
 
 def handle_button():
     global mode, last_button_time, button_was_pressed
@@ -94,45 +122,51 @@ def handle_button():
 def choose_state(light_value, mic_amplitude, motion_detected):
     global last_motion_time
 
-    now = time.time()
-
-    if motion_detected:
-        last_motion_time = now
-
+    # 1. Жесткие режимы (игнорируют датчики)
     if mode == MODE_OFF:
         return STATE_IDLE
-
     if mode == MODE_FOCUS:
         return STATE_FOCUS
 
-    room_is_dark = light_value < LIGHT_THRESHOLD
-    sound_is_active = mic_amplitude > MIC_THRESHOLD
-    recently_seen_motion = (now - last_motion_time) < NO_MOTION_TIMEOUT
+    # Обновление таймера движения
+    now = time.time()
+    if motion_detected:
+        last_motion_time = now
 
+    # 2. Проверка движения (нет движения = IDLE)
+    recently_seen_motion = (now - last_motion_time) < NO_MOTION_TIMEOUT
     if not recently_seen_motion:
         return STATE_IDLE
 
+    # 3. Есть движение -> Проверка звука (MUSIC приоритетнее)
+    sound_is_active = mic_amplitude > MIC_THRESHOLD
     if sound_is_active:
         return STATE_MUSIC
 
+    # 4. Есть движение + тишина -> Проверка освещенности
+    room_is_dark = light_value < LIGHT_THRESHOLD
     if room_is_dark:
         return STATE_AMBIENT
 
+    # Есть движение, но светло и тихо
     return STATE_IDLE
 
 def apply_state(state, mic_amplitude):
+    def map_value(x, in_min, in_max, out_min, out_max):
+        # Предотвращает выход за границы входного диапазона
+        if x < in_min: x = in_min
+        if x > in_max: x = in_max
+        return int((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
+        
     if state == STATE_IDLE:
         led_off()
-
     elif state == STATE_AMBIENT:
         fill((255, 140, 40))   # теплый свет
-
     elif state == STATE_FOCUS:
         fill((120, 180, 255))  # холодный рабочий свет
-
     elif state == STATE_MUSIC:
-        level = min(255, 40 + mic_amplitude // 4)
-        set_music_level(level)
+        brightness = map_value(mic_amplitude, 50, 400, 10, 255)
+        set_music_level(brightness)
 
 print("Система запущена")
 
@@ -143,20 +177,16 @@ while True:
     mic_avg, mic_amplitude = read_mic_level()
     motion_detected = pir.value() == 1
 
-    ## state = choose_state(light_value, mic_amplitude, motion_detected)
-    state = STATE_FOCUS
+    state = choose_state(light_value, mic_amplitude, motion_detected)
     apply_state(state, mic_amplitude)
     
     print(
         "mode =", mode_names[mode],
         "| state =", state,
         "| light =", light_value,
-        "| mic_avg =", mic_avg,
         "| mic_amp =", mic_amplitude,
         "| pir =", int(motion_detected)
     )
     
-    ## time.sleep(0.2)
-    
-    print(button.value())
-    ## time.sleep(0.1)
+    time.sleep_ms(50)  # Небольшая задержка для стабильности цикла
+
